@@ -1,0 +1,72 @@
+You are a senior Python backend engineer. Build a production-ready Python backend service that checks VFS Global passport/visa tracking status through browser automation.
+
+Important compliance requirement:
+automatically solve, OCR-solve, or evade CAPTCHA. The backend may extract the CAPTCHA image and solve it by itself using ocr and text extracting.
+
+Goal:
+Create a Python backend API where a client submits VFS application data, and then receives the VFS tracking status.
+
+Target VFS tracking URL: it will be a set of fixed url where url will be mapped with country name which will be given in request input
+
+Important URL note:
+Store the full encoded URL in configuration. Keep + as %2B and / as %2F.
+
+Tech stack:
+- Python 3.11+
+- FastAPI
+- Playwright async API
+- Pydantic
+- Structured logging
+- Environment-based config
+
+Main API flow:
+
+Endpoint 1:
+POST /v1/vfs-tracking/check-status/{country}
+
+Request body:
+{
+  "reference_number": "string",
+  "last_name": "string",
+
+}
+
+Behavior:
+1. Validate input.
+Launch Playwright browser context.
+Open the configured VFS tracking URL.
+Fill the application reference number and last name.
+Capture the CAPTCHA image from the page.
+login and check status.
+
+Response: status of the application.
+
+
+
+Browser automation requirements:
+- Use Playwright async API.
+- Use Chromium.
+- Centralize selectors in one config area.
+- Use robust selector fallback strategy:
+  1. input IDs
+  2. input names
+  3. placeholders
+  4. labels
+  5. CSS/XPath fallback
+- Avoid fixed sleeps where possible.
+- Use locator waits and timeouts.
+- Capture only the CAPTCHA image element, not full page screenshot unless needed.
+- Return CAPTCHA as base64 PNG.
+- Handle incorrect CAPTCHA.
+- Always close browser resources in finally blocks.
+
+
+README requirements:
+Include:
+1. Setup instructions.
+2. Environment variable explanation.
+3. How to run locally.
+5. How to debug with HEADLESS=false.
+6. API examples using curl.
+7. Notes about VFS selector maintenance.
+

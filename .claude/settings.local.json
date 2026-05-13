@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install:*)",
+      "Bash(py --version)",
+      "Bash(py:*)",
+      "PowerShell(python --version)",
+      "PowerShell(pip --version)",
+      "PowerShell(python3 --version 2>$null)",
+      "PowerShell(py --version 2>$null)",
+      "PowerShell(py --version)",
+      "PowerShell(py -m pip --version)",
+      "PowerShell(py -3.12 --version 2>$null)",
+      "PowerShell(py -3.11 --version 2>$null)",
+      "PowerShell(Copy-Item \"c:\\\\Users\\\\Universal\\\\Documents\\\\mufaddal\\\\TRACKING_BOT\\\\.env.example\" \"c:\\\\Users\\\\Universal\\\\Documents\\\\mufaddal\\\\TRACKING_BOT\\\\.env\")",
+      "PowerShell(winget install GitHub.cli --silent --accept-package-agreements --accept-source-agreements 2>&1)"
+    ]
+  }
+}
