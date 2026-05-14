@@ -194,8 +194,9 @@ async def check_vfs_status(
                     err_text = (await captcha_err.text_content() or "").strip()
                     if err_text and ("captcha" in err_text.lower() or "incorrect" in err_text.lower() or "invalid" in err_text.lower()):
                         log.warning(
-                            "captcha_incorrect",
+                            "captcha_attempt_failed",
                             attempt=attempt,
+                            submitted=captcha_text,
                             error_text=err_text,
                         )
                         if attempt < settings.captcha_max_retries:
@@ -206,7 +207,12 @@ async def check_vfs_status(
                             f"CAPTCHA failed after {settings.captcha_max_retries} attempts"
                         )
 
-                # No CAPTCHA error – we should have a result
+                # No CAPTCHA error – this attempt's captcha was accepted
+                log.info(
+                    "captcha_attempt_passed",
+                    attempt=attempt,
+                    submitted=captcha_text,
+                )
                 break
 
             # 4. Extract status
