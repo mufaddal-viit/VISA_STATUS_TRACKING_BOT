@@ -1,44 +1,13 @@
 from __future__ import annotations
 
-import os
-from pathlib import Path
+from functools import lru_cache
 
-from pydantic_settings import BaseSettings
 from pydantic import Field
+from pydantic_settings import BaseSettings
 
 # ---------------------------------------------------------------------------
-# VFS tracking URL mapping  (country -> encoded URL)
-# Keep %2B and %2F as-is; do NOT decode them.
+# VFS tracking URL mapping  (country -> encoded tracking URL)
 # ---------------------------------------------------------------------------
-# VFS_TRACKING_URLS: dict[str, str] = {
-#     "india": (
-#         "https://visa.vfsglobal.com/ind/en/deu/track-application"
-#     ),
-#     "germany": (
-#         "https://visa.vfsglobal.com/deu/en/ind/track-application"
-#     ),
-#     "uk": (
-#         "https://visa.vfsglobal.com/gbr/en/ind/track-application"
-#     ),
-#     "usa": (
-#         "https://visa.vfsglobal.com/usa/en/ind/track-application"
-#     ),
-#     "canada": (
-#         "https://visa.vfsglobal.com/can/en/ind/track-application"
-#     ),
-#     "france": (
-#         "https://visa.vfsglobal.com/fra/en/ind/track-application"
-#     ),
-#     "italy": (
-#         "https://visa.vfsglobal.com/ita/en/ind/track-application"
-#     ),
-#     "uae": (
-#         "https://visa.vfsglobal.com/are/en/ind/track-application"
-#     ),
-#     "south_africa": (
-#         "https://visa.vfsglobal.com/zaf/en/ind/track-application"
-#     ),
-# }
 
 VFS_TRACKING_URLS: dict[str, str] = {
     "austria": (
@@ -52,24 +21,58 @@ VFS_TRACKING_URLS: dict[str, str] = {
     ),
 }
 
-class Settings(BaseSettings):
-    """Application settings loaded from environment / .env file."""
 
+class Settings(BaseSettings):
+    """Application settings — all values can be overridden via environment variables or .env."""
+
+    # ------------------------------------------------------------------
     # Server
+    # ------------------------------------------------------------------
     host: str = "0.0.0.0"
     port: int = 8000
 
+    # ------------------------------------------------------------------
     # Browser / Playwright
+    # ------------------------------------------------------------------
     headless: bool = True
-    browser_timeout: int = Field(default=30_000, description="Playwright timeout in ms")
-    captcha_max_retries: int = 3
+    browser_timeout: int = Field(default=30_000, description="Playwright default timeout in ms")
+    captcha_max_retries: int = Field(default=3, description="Max captcha solve+submit attempts")
+    captcha_solver: str = Field(
+        default="",
+        description=(
+            "If set, use only this captcha solver (one of: 'azapi', 'twocaptcha', 'openai'). "
+            "If empty, fall back through all configured solvers in order."
+        ),
+    )
 
-    # Tesseract
-    tesseract_cmd: str | None = None
+    # ------------------------------------------------------------------
+    # Captcha solver — AZAPI.ai  (solver #1)
+    # ------------------------------------------------------------------
+    azapi_api_key: str = Field(default="", description="AZAPI.ai API key")
+    azapi_endpoint: str = Field(
+        default="https://api.azapi.ai/t0001c",
+        description="AZAPI.ai image-captcha endpoint",
+    )
 
+    # ------------------------------------------------------------------
+    # Captcha solver — 2captcha.com  (solver #2 fallback)
+    # ------------------------------------------------------------------
+    twocaptcha_api_key: str = Field(default="", description="2captcha.com API key")
+
+    # ------------------------------------------------------------------
+    # Captcha solver — OpenAI GPT-4o vision  (solver #3 fallback)
+    # ------------------------------------------------------------------
+    openai_api_key: str = Field(default="", description="OpenAI API key")
+    openai_model: str = Field(
+        default="gpt-4o",
+        description="OpenAI model used for captcha vision solving",
+    )
+
+    # ------------------------------------------------------------------
     # Logging
+    # ------------------------------------------------------------------
     log_level: str = "INFO"
-    log_format: str = "json"  # "json" or "console"
+    log_format: str = Field(default="json", description="'json' or 'console'")
 
     model_config = {
         "env_file": ".env",
@@ -78,6 +81,7 @@ class Settings(BaseSettings):
     }
 
 
+@lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
 

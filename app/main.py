@@ -20,7 +20,7 @@ import structlog
 from fastapi import FastAPI, HTTPException, Path
 from fastapi.responses import JSONResponse
 
-from app.config import Settings, VFS_TRACKING_URLS, get_settings, get_tracking_url
+from app.config import VFS_TRACKING_URLS, get_settings, get_tracking_url
 from app.logging_config import setup_logging
 from app.models import ErrorResponse, TrackingError, TrackingRequest, TrackingResponse
 from app.vfs_tracker import check_vfs_status
@@ -28,7 +28,7 @@ from app.vfs_tracker import check_vfs_status
 logger = structlog.get_logger(__name__)
 
 # ---------------------------------------------------------------------------
-# Lifespan – initialise logging & validate Tesseract on startup
+# Lifespan – initialise logging
 # ---------------------------------------------------------------------------
 
 
@@ -36,15 +36,6 @@ logger = structlog.get_logger(__name__)
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     setup_logging(log_level=settings.log_level, log_format=settings.log_format)
-
-    # Set Tesseract path if configured
-    if settings.tesseract_cmd:
-        try:
-            import pytesseract
-
-            pytesseract.pytesseract.tesseract_cmd = settings.tesseract_cmd
-        except ImportError:
-            pass
 
     logger.info(
         "app_startup",
@@ -105,7 +96,7 @@ async def check_status(
     The backend will:
     1. Open the VFS tracking page for the given country.
     2. Fill in the reference number and last name.
-    3. Solve the CAPTCHA via OCR.
+    3. Solve the CAPTCHA via the configured solver chain (azapi → 2captcha → openai).
     4. Submit and return the status.
     """
     settings = get_settings()

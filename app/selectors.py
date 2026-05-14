@@ -30,32 +30,16 @@ class SelectorGroup:
 
 REFERENCE_NUMBER_INPUT = SelectorGroup(
     candidates=[
-        "#txtRefNo",
-        "input[name='txtRefNo']",
-        "input[placeholder*='reference' i]",
-        "input[placeholder*='Reference' i]",
-        "label:has-text('Reference') >> xpath=../input",
-        "text=Reference Number >> xpath=../input",
-        "#ApplicationId",
-        "input[name='ApplicationId']",
-        "input[id*='ref' i]",
-        "input[name*='ref' i]",
+        "#AppRefNo",
+        "input[name='AppRefNo']",
+        "input[placeholder='Application Reference Number']",
     ]
 )
 
 LAST_NAME_INPUT = SelectorGroup(
     candidates=[
-        "#txtLastName",
-        "input[name='txtLastName']",
-        "input[placeholder*='last name' i]",
-        "input[placeholder*='Last Name' i]",
-        "input[placeholder*='surname' i]",
-        "label:has-text('Last Name') >> xpath=../input",
-        "label:has-text('Surname') >> xpath=../input",
-        "#LastName",
         "input[name='LastName']",
-        "input[id*='last' i]",
-        "input[name*='last' i]",
+        "input[placeholder='Last Name']",
     ]
 )
 
@@ -75,31 +59,16 @@ CAPTCHA_IMAGE = SelectorGroup(
 
 CAPTCHA_INPUT = SelectorGroup(
     candidates=[
-        "#txtCaptcha",
-        "input[name='txtCaptcha']",
-        "input[placeholder*='captcha' i]",
-        "input[placeholder*='Captcha' i]",
-        "input[placeholder*='code' i]",
-        "label:has-text('Captcha') >> xpath=../input",
-        "label:has-text('Security') >> xpath=../input",
         "#CaptchaInputText",
         "input[name='CaptchaInputText']",
-        "input[id*='captcha' i]",
-        "input[name*='captcha' i]",
     ]
 )
 
 SUBMIT_BUTTON = SelectorGroup(
     candidates=[
-        "#btnSubmit",
-        "button[type='submit']",
+        "#submitButton",
+        "input[type='submit'][value='Submit']",
         "input[type='submit']",
-        "button:has-text('Submit')",
-        "button:has-text('Track')",
-        "button:has-text('Check Status')",
-        "a:has-text('Submit')",
-        "#btnTrack",
-        ".btn-submit",
     ]
 )
 
@@ -129,11 +98,24 @@ STATUS_DETAIL = SelectorGroup(
 
 CAPTCHA_ERROR = SelectorGroup(
     candidates=[
-        "#lblCaptchaError",
-        ".captcha-error",
         ".validation-summary-errors",
-        ".error-message",
-        "[class*='error' i]",
-        ".alert-danger",
+    ]
+)
+
+# Shown when the reference number / last name combination is rejected.
+# Page renders: <div style="color: blue;"><b>Invalid Inputs.</b>...</div>
+# A reCAPTCHA v2 widget also appears alongside this — we cannot solve it,
+# so detect and fail fast instead of retrying.
+INVALID_INPUTS_ERROR = SelectorGroup(
+    candidates=[
+        "div:has(> b:has-text('Invalid Inputs'))",
+        "b:has-text('Invalid Inputs')",
+    ]
+)
+
+RECAPTCHA_WIDGET = SelectorGroup(
+    candidates=[
+        ".g-recaptcha",
+        "iframe[src*='recaptcha']",
     ]
 )

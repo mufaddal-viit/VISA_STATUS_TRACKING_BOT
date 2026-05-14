@@ -4,7 +4,7 @@ Playwright-based VFS tracking automation.
 Handles the full flow:
   1. Navigate to the tracking URL.
   2. Fill reference number and last name.
-  3. Capture and OCR-solve the CAPTCHA.
+  3. Capture the CAPTCHA and solve it via the configured solver chain.
   4. Submit the form.
   5. Detect incorrect-CAPTCHA errors and retry.
   6. Extract the application status text.
@@ -17,7 +17,6 @@ from playwright.async_api import (
     BrowserContext,
     Locator,
     Page,
-    Playwright,
     async_playwright,
 )
 
@@ -28,7 +27,9 @@ from app.selectors import (
     CAPTCHA_ERROR,
     CAPTCHA_IMAGE,
     CAPTCHA_INPUT,
+    INVALID_INPUTS_ERROR,
     LAST_NAME_INPUT,
+    RECAPTCHA_WIDGET,
     REFERENCE_NUMBER_INPUT,
     STATUS_DETAIL,
     STATUS_RESULT,
@@ -109,16 +110,18 @@ async def check_vfs_status(
             await page.goto(tracking_url, wait_until="networkidle")
             log.info("page_loaded")
 
-            # 2. Fill form fields
+            # 2. Fill form fields (1s pause between fields to mimic human input)
             ref_input = await _resolve_selector_strict(
                 page, REFERENCE_NUMBER_INPUT, "reference_number"
             )
             await ref_input.fill(reference_number)
+            await page.wait_for_timeout(1000)
 
             last_name_input = await _resolve_selector_strict(
                 page, LAST_NAME_INPUT, "last_name"
             )
             await last_name_input.fill(last_name)
+            await page.wait_for_timeout(1000)
 
             log.info("form_filled")
 
@@ -135,8 +138,9 @@ async def check_vfs_status(
                 captcha_bytes = await captcha_img.screenshot()
                 captcha_b64 = image_bytes_to_base64(captcha_bytes)
 
-                # Solve via OCR
-                captcha_text = solve_captcha_from_bytes(captcha_bytes)
+                # Solve via configured solver (single if CAPTCHA_SOLVER is set,
+                # otherwise chain: azapi → 2captcha → openai)
+                captcha_text = await solve_captcha_from_bytes(captcha_bytes, settings)
                 log.info("captcha_solved", text=captcha_text, attempt=attempt)
 
                 # Fill CAPTCHA input
@@ -145,6 +149,7 @@ async def check_vfs_status(
                 )
                 await captcha_input.fill("")  # clear any previous value
                 await captcha_input.fill(captcha_text)
+                await page.wait_for_timeout(1000)
 
                 # Submit
                 submit_btn = await _resolve_selector_strict(
@@ -155,9 +160,35 @@ async def check_vfs_status(
                 # Wait for navigation / result
                 await page.wait_for_load_state("networkidle")
 
-                # Check for CAPTCHA error
+                # Check for "Invalid Inputs." — wrong reference/last name. The page
+                # also shows a reCAPTCHA v2 widget here which we cannot auto-solve,
+                # so fail fast instead of retrying.
+                invalid_inputs = await _resolve_selector(
+                    page, INVALID_INPUTS_ERROR, timeout=500
+                )
+                if invalid_inputs:
+                    has_recaptcha = await _resolve_selector(
+                        page, RECAPTCHA_WIDGET, timeout=200
+                    )
+                    log.error(
+                        "invalid_inputs_detected",
+                        attempt=attempt,
+                        recaptcha_present=bool(has_recaptcha),
+                    )
+                    raise TrackingError(
+                        "Invalid Inputs: the reference number / last name combination "
+                        "was rejected by VFS."
+                        + (
+                            " A reCAPTCHA challenge was also presented, which cannot "
+                            "be solved automatically."
+                            if has_recaptcha
+                            else ""
+                        )
+                    )
+
+                # Check for CAPTCHA error (element is rendered with the page, not async)
                 captcha_err = await _resolve_selector(
-                    page, CAPTCHA_ERROR, timeout=3000
+                    page, CAPTCHA_ERROR, timeout=500
                 )
                 if captcha_err:
                     err_text = (await captcha_err.text_content() or "").strip()
