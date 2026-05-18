@@ -90,7 +90,18 @@ async def check_vfs_status(
     log.info("vfs_check_start", url=tracking_url)
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=settings.headless)
+        # Connect to a remote browser (Browserless.io) when configured —
+        # required on serverless hosts (Vercel) that cannot run local Chromium.
+        # Otherwise launch a local Chromium for dev / VPS deployments.
+        if settings.use_remote_browser:
+            log.info("connecting_remote_browser")
+            browser = await pw.chromium.connect_over_cdp(
+                settings.browserless_ws_endpoint,
+                timeout=settings.browser_timeout,
+            )
+        else:
+            browser = await pw.chromium.launch(headless=settings.headless)
+
         context: BrowserContext | None = None
         page: Page | None = None
 
