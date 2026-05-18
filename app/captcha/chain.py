@@ -7,6 +7,7 @@ falls through to the next. Raises TrackingError only when all solvers fail.
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 
 import structlog
@@ -16,7 +17,9 @@ from app.models import TrackingError
 
 logger = structlog.get_logger(__name__)
 
-DEBUG_DIR = Path("debug_captcha")
+# Use the system temp dir — on serverless hosts (Vercel) the project
+# directory is read-only and only /tmp is writable.
+DEBUG_DIR = Path(tempfile.gettempdir()) / "debug_captcha"
 
 
 async def solve_captcha(image_bytes: bytes, solvers: list[CaptchaSolverBase]) -> str:
@@ -26,8 +29,12 @@ async def solve_captcha(image_bytes: bytes, solvers: list[CaptchaSolverBase]) ->
     Saves the raw image to debug_captcha/ for inspection.
     Raises TrackingError if all solvers fail or none are configured.
     """
-    DEBUG_DIR.mkdir(exist_ok=True)
-    (DEBUG_DIR / "captcha_raw.png").write_bytes(image_bytes)
+    # Best-effort debug dump — never let it break the request.
+    try:
+        DEBUG_DIR.mkdir(exist_ok=True)
+        (DEBUG_DIR / "captcha_raw.png").write_bytes(image_bytes)
+    except OSError as exc:
+        logger.warning("captcha_debug_dump_skipped", error=str(exc))
 
     active = [s for s in solvers if s.is_configured()]
     if not active:
