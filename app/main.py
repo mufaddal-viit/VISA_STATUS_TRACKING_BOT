@@ -17,7 +17,7 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 import structlog
-from fastapi import FastAPI, HTTPException, Path
+from fastapi import FastAPI, HTTPException, Path, Query
 from fastapi.responses import JSONResponse, Response
 
 from app.config import VFS_TRACKING_URLS, get_settings, get_tracking_url
@@ -88,12 +88,19 @@ async def supported_countries():
 )
 async def debug_captcha(
     country: str = Path(..., description="Country key. See /supported-countries."),
+    full: bool = Query(
+        False,
+        description="If true, return a FULL-PAGE screenshot instead of just the captcha.",
+    ),
 ):
     """
-    DEBUG: Open the country's tracking page and return the captcha image as PNG.
+    DEBUG: Open the country's tracking page and return a PNG image.
 
-    No solving, no form submission — just the raw image the solver would see.
-    Open this URL directly in a browser to eyeball the captcha.
+    - Default: just the captcha image the solver would see.
+    - ?full=true: a full-page screenshot of whatever the browser rendered —
+      use this to debug why the remote (Browserless) browser differs from local.
+
+    Open this URL directly in a browser to eyeball the result.
     """
     settings = get_settings()
     tracking_url = get_tracking_url(country)
@@ -105,7 +112,9 @@ async def debug_captcha(
         )
 
     try:
-        png_bytes = await capture_captcha_image(tracking_url, settings)
+        png_bytes = await capture_captcha_image(
+            tracking_url, settings, full_page=full
+        )
     except Exception as exc:
         logger.exception("debug_captcha_failed", country=country)
         raise HTTPException(

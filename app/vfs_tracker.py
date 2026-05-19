@@ -327,13 +327,18 @@ async def check_vfs_status(
 # Debug helper — capture the captcha image only (no solving / no submit)
 # ---------------------------------------------------------------------------
 
-async def capture_captcha_image(tracking_url: str, settings: Settings) -> bytes:
-    """Open the tracking page and return raw PNG bytes of the captcha image.
+async def capture_captcha_image(
+    tracking_url: str, settings: Settings, full_page: bool = False
+) -> bytes:
+    """Open the tracking page and return raw PNG bytes.
 
-    Used by the debug endpoint to inspect exactly what the solver sees.
+    full_page=False -> just the captcha image (what the solver sees).
+    full_page=True  -> a full-page screenshot of whatever the (remote) browser
+                       actually rendered. Used to debug why the remote browser
+                       differs from local.
     """
     log = logger.bind(url=tracking_url)
-    log.info("capture_captcha_start")
+    log.info("capture_captcha_start", full_page=full_page)
 
     async with async_playwright() as pw:
         if settings.use_remote_browser:
@@ -351,6 +356,22 @@ async def capture_captcha_image(tracking_url: str, settings: Settings) -> bytes:
             page = await context.new_page()
             page.set_default_timeout(settings.browser_timeout)
             await page.goto(tracking_url, wait_until="networkidle")
+
+            if full_page:
+                # Wait for the captcha <img> to decode first, so the full-page
+                # shot reflects the same moment the solver would capture.
+                captcha_img = await _resolve_selector(page, CAPTCHA_IMAGE, timeout=5000)
+                if captcha_img is not None:
+                    try:
+                        await page.wait_for_function(
+                            "el => el.complete && el.naturalWidth > 0",
+                            arg=await captcha_img.element_handle(),
+                            timeout=10000,
+                        )
+                    except Exception:
+                        log.warning("full_page_captcha_decode_wait_timed_out")
+                await page.wait_for_timeout(500)
+                return await page.screenshot(full_page=True)
 
             captcha_img = await _resolve_selector_strict(
                 page, CAPTCHA_IMAGE, "captcha_image"
