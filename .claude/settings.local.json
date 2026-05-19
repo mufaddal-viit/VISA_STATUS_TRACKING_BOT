@@ -40,7 +40,8 @@
       "WebFetch(domain:2captcha.com)",
       "PowerShell(New-Item -ItemType Directory -Force \"c:\\\\Users\\\\Universal\\\\Documents\\\\mufaddal\\\\TRACKING_BOT\\\\app\\\\captcha\")",
       "Bash(venv/Scripts/python.exe -c 'import inspect; import sys; sys.path.insert\\(0, '\\\\''.'\\\\''\\); *)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(python -c \"import ast; [ast.parse\\(open\\(f\\).read\\(\\)\\) for f in ['app/main.py','app/models.py','app/vfs_tracker.py','app/captcha/chain.py']]; print\\('all files parse OK'\\)\")"
     ]
   }
 }

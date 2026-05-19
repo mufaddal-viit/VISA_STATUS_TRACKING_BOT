@@ -18,12 +18,12 @@ if sys.platform == "win32":
 
 import structlog
 from fastapi import FastAPI, HTTPException, Path
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from app.config import VFS_TRACKING_URLS, get_settings, get_tracking_url
 from app.logging_config import setup_logging
 from app.models import ErrorResponse, TrackingError, TrackingRequest, TrackingResponse
-from app.vfs_tracker import check_vfs_status
+from app.vfs_tracker import capture_captcha_image, check_vfs_status
 
 logger = structlog.get_logger(__name__)
 
@@ -74,6 +74,43 @@ async def supported_countries():
     return {"countries": list(VFS_TRACKING_URLS.keys())}
 
 
+@app.get(
+    "/v1/vfs-tracking/debug-captcha/{country}",
+    responses={
+        200: {"content": {"image/png": {}}, "description": "Raw captcha PNG"},
+        404: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+    },
+)
+async def debug_captcha(
+    country: str = Path(..., description="Country key. See /supported-countries."),
+):
+    """
+    DEBUG: Open the country's tracking page and return the captcha image as PNG.
+
+    No solving, no form submission — just the raw image the solver would see.
+    Open this URL directly in a browser to eyeball the captcha.
+    """
+    settings = get_settings()
+    tracking_url = get_tracking_url(country)
+    if tracking_url is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Country '{country}' is not supported. "
+            f"Supported: {list(VFS_TRACKING_URLS.keys())}",
+        )
+
+    try:
+        png_bytes = await capture_captcha_image(tracking_url, settings)
+    except Exception as exc:
+        logger.exception("debug_captcha_failed", country=country)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to capture captcha: {exc}"
+        ) from exc
+
+    return Response(content=png_bytes, media_type="image/png")
+
+
 @app.post(
     "/v1/vfs-tracking/check-status/{country}",
     response_model=TrackingResponse,
@@ -122,6 +159,13 @@ async def check_status(
         )
     except TrackingError as exc:
         log.warning("tracking_automation_error", error=str(exc))
+        # When debug is requested, return 422 with the per-attempt captcha info
+        # so the caller can see exactly what the solver read.
+        if body.debug and getattr(exc, "debug_attempts", None):
+            raise HTTPException(
+                status_code=422,
+                detail={"error": str(exc), "debug_attempts": exc.debug_attempts},
+            ) from exc
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         log.exception("tracking_unexpected_error")
@@ -136,6 +180,7 @@ async def check_status(
         country=country.lower(),
         status=result["status"],
         status_details=result.get("status_details"),
+        debug_attempts=result.get("debug_attempts") if body.debug else None,
     )
 
 

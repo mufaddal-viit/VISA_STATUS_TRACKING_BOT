@@ -138,9 +138,12 @@ async def check_vfs_status(
 
             # 3. CAPTCHA loop (retry on incorrect CAPTCHA)
             captcha_b64: str | None = None
+            debug_attempts: list[dict] = []
 
             for attempt in range(1, settings.captcha_max_retries + 1):
                 log.info("captcha_attempt", attempt=attempt)
+                attempt_rec: dict = {"attempt": attempt}
+                debug_attempts.append(attempt_rec)
 
                 # Capture CAPTCHA image element
                 captcha_img = await _resolve_selector_strict(
@@ -148,10 +151,16 @@ async def check_vfs_status(
                 )
                 captcha_bytes = await captcha_img.screenshot()
                 captcha_b64 = image_bytes_to_base64(captcha_bytes)
+                attempt_rec["captcha_b64"] = captcha_b64
 
                 # Solve via configured solver (single if CAPTCHA_SOLVER is set,
                 # otherwise chain: azapi → 2captcha → openai)
-                captcha_text = await solve_captcha_from_bytes(captcha_bytes, settings)
+                try:
+                    captcha_text = await solve_captcha_from_bytes(captcha_bytes, settings)
+                except Exception as exc:
+                    attempt_rec["error"] = f"solver error: {exc}"
+                    raise
+                attempt_rec["solved_text"] = captcha_text
                 log.info("captcha_solved", text=captcha_text, attempt=attempt)
 
                 # Fill CAPTCHA input
@@ -204,6 +213,8 @@ async def check_vfs_status(
                 if captcha_err:
                     err_text = (await captcha_err.text_content() or "").strip()
                     if err_text and ("captcha" in err_text.lower() or "incorrect" in err_text.lower() or "invalid" in err_text.lower()):
+                        attempt_rec["accepted"] = False
+                        attempt_rec["error"] = err_text
                         log.warning(
                             "captcha_attempt_failed",
                             attempt=attempt,
@@ -215,10 +226,12 @@ async def check_vfs_status(
                             await page.wait_for_timeout(1000)
                             continue
                         raise TrackingError(
-                            f"CAPTCHA failed after {settings.captcha_max_retries} attempts"
+                            f"CAPTCHA failed after {settings.captcha_max_retries} attempts",
+                            debug_attempts=debug_attempts,
                         )
 
                 # No CAPTCHA error – this attempt's captcha was accepted
+                attempt_rec["accepted"] = True
                 log.info(
                     "captcha_attempt_passed",
                     attempt=attempt,
@@ -236,6 +249,7 @@ async def check_vfs_status(
                 "status": status_text,
                 "status_details": status_details,
                 "captcha_b64": captcha_b64,
+                "debug_attempts": debug_attempts,
             }
 
         except Exception:
@@ -254,6 +268,45 @@ async def check_vfs_status(
                 await context.close()
             await browser.close()
             log.info("browser_closed")
+
+
+# ---------------------------------------------------------------------------
+# Debug helper — capture the captcha image only (no solving / no submit)
+# ---------------------------------------------------------------------------
+
+async def capture_captcha_image(tracking_url: str, settings: Settings) -> bytes:
+    """Open the tracking page and return raw PNG bytes of the captcha image.
+
+    Used by the debug endpoint to inspect exactly what the solver sees.
+    """
+    log = logger.bind(url=tracking_url)
+    log.info("capture_captcha_start")
+
+    async with async_playwright() as pw:
+        if settings.use_remote_browser:
+            browser = await pw.chromium.connect_over_cdp(
+                settings.browserless_ws_endpoint, timeout=settings.browser_timeout
+            )
+        else:
+            browser = await pw.chromium.launch(headless=settings.headless)
+
+        context: BrowserContext | None = None
+        try:
+            context = await browser.new_context(
+                viewport={"width": 1280, "height": 900},
+            )
+            page = await context.new_page()
+            page.set_default_timeout(settings.browser_timeout)
+            await page.goto(tracking_url, wait_until="networkidle")
+
+            captcha_img = await _resolve_selector_strict(
+                page, CAPTCHA_IMAGE, "captcha_image"
+            )
+            return await captcha_img.screenshot()
+        finally:
+            if context:
+                await context.close()
+            await browser.close()
 
 
 # ---------------------------------------------------------------------------
