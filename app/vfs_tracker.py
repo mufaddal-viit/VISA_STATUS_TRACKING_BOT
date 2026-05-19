@@ -70,6 +70,39 @@ async def _resolve_selector_strict(
 
 
 # ---------------------------------------------------------------------------
+# Captcha image capture
+# ---------------------------------------------------------------------------
+
+async def _screenshot_captcha(page: Page, captcha_img: Locator, log) -> bytes:
+    """Wait until the captcha <img> is fully decoded, then screenshot it.
+
+    The VFS captcha is a server-generated image (DefaultCaptcha/Generate). The
+    <img> element gets its CSS size immediately, but the actual pixels arrive
+    later — screenshotting too early yields a half-painted (white) image.
+    We wait for the image to be `complete` with a non-zero naturalWidth.
+    """
+    try:
+        await captcha_img.scroll_into_view_if_needed(timeout=3000)
+    except Exception:
+        pass
+
+    # Wait for the browser to finish decoding the image.
+    try:
+        await page.wait_for_function(
+            """el => el.complete && el.naturalWidth > 0 && el.naturalHeight > 0""",
+            arg=await captcha_img.element_handle(),
+            timeout=10000,
+        )
+    except Exception:
+        log.warning("captcha_image_decode_wait_timed_out")
+
+    # Small settle so any progressive paint finishes.
+    await page.wait_for_timeout(500)
+
+    return await captcha_img.screenshot()
+
+
+# ---------------------------------------------------------------------------
 # Core automation
 # ---------------------------------------------------------------------------
 
@@ -145,11 +178,11 @@ async def check_vfs_status(
                 attempt_rec: dict = {"attempt": attempt}
                 debug_attempts.append(attempt_rec)
 
-                # Capture CAPTCHA image element
+                # Capture CAPTCHA image element (waits for it to fully decode)
                 captcha_img = await _resolve_selector_strict(
                     page, CAPTCHA_IMAGE, "captcha_image"
                 )
-                captcha_bytes = await captcha_img.screenshot()
+                captcha_bytes = await _screenshot_captcha(page, captcha_img, log)
                 captcha_b64 = image_bytes_to_base64(captcha_bytes)
                 attempt_rec["captcha_b64"] = captcha_b64
 
@@ -302,7 +335,7 @@ async def capture_captcha_image(tracking_url: str, settings: Settings) -> bytes:
             captcha_img = await _resolve_selector_strict(
                 page, CAPTCHA_IMAGE, "captcha_image"
             )
-            return await captcha_img.screenshot()
+            return await _screenshot_captcha(page, captcha_img, log)
         finally:
             if context:
                 await context.close()
