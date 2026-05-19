@@ -74,43 +74,49 @@ async def _resolve_selector_strict(
 # ---------------------------------------------------------------------------
 
 async def _get_captcha_bytes(page: Page, captcha_img: Locator, log) -> bytes:
-    """Return the raw captcha image bytes.
+    """Return the raw captcha image bytes from the ALREADY-LOADED <img>.
 
-    Primary method: fetch the image directly from its `src` URL using the
-    page's own browser session (same cookies/session). This yields the exact
-    pixels the server generated — no layout, CSS padding, or white-gap
-    artifacts that an element screenshot can introduce.
-
-    Fallback: screenshot the <img> element after it has fully decoded.
+    The VFS captcha (BotDetect component) is bound to a one-time token stored
+    in the hidden #CaptchaDeText input. Re-fetching the Generate URL would make
+    the server hand out a DIFFERENT captcha than the one the form session
+    expects — so we must NOT re-fetch. Instead we read the pixels the browser
+    already decoded into the <img>, by drawing it to a canvas at its natural
+    size. This gives an exact, tightly-cropped PNG with no layout/CSS artifacts.
     """
-    # --- Primary: fetch the captcha image bytes from its src ---
-    try:
-        src = await captcha_img.get_attribute("src")
-        if src:
-            abs_url = await captcha_img.evaluate("e => e.src")  # resolves relative URLs
-            resp = await page.request.get(abs_url)
-            if resp.ok:
-                body = await resp.body()
-                if body:
-                    log.info("captcha_fetched_from_src", url=abs_url, bytes=len(body))
-                    return body
-            log.warning("captcha_src_fetch_bad_status", status=resp.status)
-    except Exception as exc:
-        log.warning("captcha_src_fetch_failed", error=str(exc))
-
-    # --- Fallback: screenshot the element after it fully decodes ---
-    try:
-        await captcha_img.scroll_into_view_if_needed(timeout=3000)
-    except Exception:
-        pass
+    # 1. Wait until the <img> is fully decoded (pixels actually present).
+    handle = await captcha_img.element_handle()
     try:
         await page.wait_for_function(
             """el => el.complete && el.naturalWidth > 0 && el.naturalHeight > 0""",
-            arg=await captcha_img.element_handle(),
+            arg=handle,
             timeout=10000,
         )
     except Exception:
         log.warning("captcha_image_decode_wait_timed_out")
+
+    # 2. Draw the decoded image onto a canvas at natural size -> PNG data URL.
+    try:
+        data_url = await captcha_img.evaluate(
+            """el => {
+                const c = document.createElement('canvas');
+                c.width = el.naturalWidth;
+                c.height = el.naturalHeight;
+                const ctx = c.getContext('2d');
+                ctx.drawImage(el, 0, 0);
+                return c.toDataURL('image/png');
+            }"""
+        )
+        if data_url and data_url.startswith("data:image"):
+            import base64 as _b64
+            b64part = data_url.split(",", 1)[1]
+            body = _b64.b64decode(b64part)
+            if body:
+                log.info("captcha_captured_via_canvas", bytes=len(body))
+                return body
+    except Exception as exc:
+        log.warning("captcha_canvas_capture_failed", error=str(exc))
+
+    # 3. Fallback: element screenshot (after a settle so paint completes).
     await page.wait_for_timeout(500)
     log.info("captcha_captured_via_screenshot")
     return await captcha_img.screenshot()
