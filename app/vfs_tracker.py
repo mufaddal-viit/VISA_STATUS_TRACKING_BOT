@@ -73,20 +73,36 @@ async def _resolve_selector_strict(
 # Captcha image capture
 # ---------------------------------------------------------------------------
 
-async def _screenshot_captcha(page: Page, captcha_img: Locator, log) -> bytes:
-    """Wait until the captcha <img> is fully decoded, then screenshot it.
+async def _get_captcha_bytes(page: Page, captcha_img: Locator, log) -> bytes:
+    """Return the raw captcha image bytes.
 
-    The VFS captcha is a server-generated image (DefaultCaptcha/Generate). The
-    <img> element gets its CSS size immediately, but the actual pixels arrive
-    later — screenshotting too early yields a half-painted (white) image.
-    We wait for the image to be `complete` with a non-zero naturalWidth.
+    Primary method: fetch the image directly from its `src` URL using the
+    page's own browser session (same cookies/session). This yields the exact
+    pixels the server generated — no layout, CSS padding, or white-gap
+    artifacts that an element screenshot can introduce.
+
+    Fallback: screenshot the <img> element after it has fully decoded.
     """
+    # --- Primary: fetch the captcha image bytes from its src ---
+    try:
+        src = await captcha_img.get_attribute("src")
+        if src:
+            abs_url = await captcha_img.evaluate("e => e.src")  # resolves relative URLs
+            resp = await page.request.get(abs_url)
+            if resp.ok:
+                body = await resp.body()
+                if body:
+                    log.info("captcha_fetched_from_src", url=abs_url, bytes=len(body))
+                    return body
+            log.warning("captcha_src_fetch_bad_status", status=resp.status)
+    except Exception as exc:
+        log.warning("captcha_src_fetch_failed", error=str(exc))
+
+    # --- Fallback: screenshot the element after it fully decodes ---
     try:
         await captcha_img.scroll_into_view_if_needed(timeout=3000)
     except Exception:
         pass
-
-    # Wait for the browser to finish decoding the image.
     try:
         await page.wait_for_function(
             """el => el.complete && el.naturalWidth > 0 && el.naturalHeight > 0""",
@@ -95,10 +111,8 @@ async def _screenshot_captcha(page: Page, captcha_img: Locator, log) -> bytes:
         )
     except Exception:
         log.warning("captcha_image_decode_wait_timed_out")
-
-    # Small settle so any progressive paint finishes.
     await page.wait_for_timeout(500)
-
+    log.info("captcha_captured_via_screenshot")
     return await captcha_img.screenshot()
 
 
@@ -182,7 +196,7 @@ async def check_vfs_status(
                 captcha_img = await _resolve_selector_strict(
                     page, CAPTCHA_IMAGE, "captcha_image"
                 )
-                captcha_bytes = await _screenshot_captcha(page, captcha_img, log)
+                captcha_bytes = await _get_captcha_bytes(page, captcha_img, log)
                 captcha_b64 = image_bytes_to_base64(captcha_bytes)
                 attempt_rec["captcha_b64"] = captcha_b64
 
@@ -335,7 +349,7 @@ async def capture_captcha_image(tracking_url: str, settings: Settings) -> bytes:
             captcha_img = await _resolve_selector_strict(
                 page, CAPTCHA_IMAGE, "captcha_image"
             )
-            return await _screenshot_captcha(page, captcha_img, log)
+            return await _get_captcha_bytes(page, captcha_img, log)
         finally:
             if context:
                 await context.close()
@@ -383,29 +397,56 @@ async def inspect_captcha_dom(tracking_url: str, settings: Settings) -> dict:
                 }))""",
             )
 
-            # What the current CAPTCHA_IMAGE selector chain resolves to.
+            # What the current CAPTCHA_IMAGE selector chain resolves to,
+            # plus its computed CSS box, parent, and how many elements match.
             resolved: dict | None = None
             for selector in CAPTCHA_IMAGE.candidates:
                 loc = page.locator(selector).first
                 try:
                     await loc.wait_for(state="visible", timeout=2000)
-                    box = await loc.bounding_box()
-                    tag = await loc.evaluate("e => e.tagName")
-                    html = await loc.evaluate("e => e.outerHTML.slice(0, 300)")
+                    count = await page.locator(selector).count()
+                    detail = await loc.evaluate(
+                        """e => {
+                            const cs = getComputedStyle(e);
+                            const r = e.getBoundingClientRect();
+                            return {
+                                tag: e.tagName,
+                                clientRect: {w: r.width, h: r.height, x: r.x, y: r.y},
+                                cssWidth: cs.width, cssHeight: cs.height,
+                                padding: cs.padding, border: cs.border,
+                                objectFit: cs.objectFit, display: cs.display,
+                                naturalWidth: e.naturalWidth, naturalHeight: e.naturalHeight,
+                                parentTag: e.parentElement && e.parentElement.tagName,
+                                parentOuterHTML: e.parentElement
+                                    && e.parentElement.outerHTML.slice(0, 400),
+                                outerHTML: e.outerHTML.slice(0, 300),
+                            };
+                        }"""
+                    )
                     resolved = {
                         "matched_selector": selector,
-                        "tag": tag,
-                        "bounding_box": box,
-                        "outerHTML": html,
+                        "match_count": count,
+                        **detail,
                     }
                     break
                 except Exception:
                     continue
 
+            # Screenshot exactly what the captcha locator screenshots, base64'd,
+            # so we can see if the image bytes themselves contain the white gap.
+            captcha_shot_b64: str | None = None
+            try:
+                cap = page.locator(CAPTCHA_IMAGE.candidates[0]).first
+                shot = await cap.screenshot()
+                captcha_shot_b64 = image_bytes_to_base64(shot)
+            except Exception as exc:
+                logger.warning("inspect_captcha_screenshot_failed", error=str(exc))
+
             return {
                 "tracking_url": tracking_url,
                 "all_images": images,
                 "captcha_selector_resolved": resolved,
+                "captcha_screenshot_b64": captcha_shot_b64,
             }
         finally:
             if context:
