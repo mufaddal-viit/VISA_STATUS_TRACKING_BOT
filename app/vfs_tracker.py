@@ -309,6 +309,77 @@ async def capture_captcha_image(tracking_url: str, settings: Settings) -> bytes:
             await browser.close()
 
 
+async def inspect_captcha_dom(tracking_url: str, settings: Settings) -> dict:
+    """Open the tracking page and report every <img> on it + the captcha selector hit.
+
+    Used to figure out the correct captcha selector when the captured screenshot
+    looks wrong (e.g. it captured a container div instead of the image).
+    """
+    log = logger.bind(url=tracking_url)
+    log.info("inspect_captcha_dom_start")
+
+    async with async_playwright() as pw:
+        if settings.use_remote_browser:
+            browser = await pw.chromium.connect_over_cdp(
+                settings.browserless_ws_endpoint, timeout=settings.browser_timeout
+            )
+        else:
+            browser = await pw.chromium.launch(headless=settings.headless)
+
+        context: BrowserContext | None = None
+        try:
+            context = await browser.new_context(
+                viewport={"width": 1280, "height": 900},
+            )
+            page = await context.new_page()
+            page.set_default_timeout(settings.browser_timeout)
+            await page.goto(tracking_url, wait_until="networkidle")
+
+            # Report every <img> on the page: tag, id, src, size, outer HTML.
+            images = await page.eval_on_selector_all(
+                "img",
+                """els => els.map(e => ({
+                    id: e.id,
+                    src: (e.getAttribute('src') || '').slice(0, 120),
+                    alt: e.alt,
+                    width: e.width,
+                    height: e.height,
+                    naturalWidth: e.naturalWidth,
+                    naturalHeight: e.naturalHeight,
+                    outerHTML: e.outerHTML.slice(0, 300)
+                }))""",
+            )
+
+            # What the current CAPTCHA_IMAGE selector chain resolves to.
+            resolved: dict | None = None
+            for selector in CAPTCHA_IMAGE.candidates:
+                loc = page.locator(selector).first
+                try:
+                    await loc.wait_for(state="visible", timeout=2000)
+                    box = await loc.bounding_box()
+                    tag = await loc.evaluate("e => e.tagName")
+                    html = await loc.evaluate("e => e.outerHTML.slice(0, 300)")
+                    resolved = {
+                        "matched_selector": selector,
+                        "tag": tag,
+                        "bounding_box": box,
+                        "outerHTML": html,
+                    }
+                    break
+                except Exception:
+                    continue
+
+            return {
+                "tracking_url": tracking_url,
+                "all_images": images,
+                "captcha_selector_resolved": resolved,
+            }
+        finally:
+            if context:
+                await context.close()
+            await browser.close()
+
+
 # ---------------------------------------------------------------------------
 # Status extraction helpers
 # ---------------------------------------------------------------------------

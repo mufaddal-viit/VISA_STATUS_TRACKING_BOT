@@ -23,7 +23,11 @@ from fastapi.responses import JSONResponse, Response
 from app.config import VFS_TRACKING_URLS, get_settings, get_tracking_url
 from app.logging_config import setup_logging
 from app.models import ErrorResponse, TrackingError, TrackingRequest, TrackingResponse
-from app.vfs_tracker import capture_captcha_image, check_vfs_status
+from app.vfs_tracker import (
+    capture_captcha_image,
+    check_vfs_status,
+    inspect_captcha_dom,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -109,6 +113,34 @@ async def debug_captcha(
         ) from exc
 
     return Response(content=png_bytes, media_type="image/png")
+
+
+@app.get("/v1/vfs-tracking/inspect-captcha/{country}")
+async def inspect_captcha(
+    country: str = Path(..., description="Country key. See /supported-countries."),
+):
+    """
+    DEBUG: List every <img> on the country's tracking page and show which
+    element the CAPTCHA_IMAGE selector currently resolves to.
+
+    Use this to find the correct captcha selector when the captured
+    screenshot looks wrong.
+    """
+    settings = get_settings()
+    tracking_url = get_tracking_url(country)
+    if tracking_url is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Country '{country}' is not supported.",
+        )
+
+    try:
+        return await inspect_captcha_dom(tracking_url, settings)
+    except Exception as exc:
+        logger.exception("inspect_captcha_failed", country=country)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to inspect captcha: {exc}"
+        ) from exc
 
 
 @app.post(
