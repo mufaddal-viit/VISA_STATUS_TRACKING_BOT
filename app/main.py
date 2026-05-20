@@ -16,9 +16,11 @@ from typing import AsyncIterator
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+from pathlib import Path as _FsPath
+
 import structlog
 from fastapi import FastAPI, HTTPException, Path, Query
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from app.config import VFS_TRACKING_URLS, get_settings, get_tracking_url
@@ -66,6 +68,15 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+
+_STATIC_DIR = _FsPath(__file__).parent / "static"
+
+
+@app.get("/", include_in_schema=False)
+async def index():
+    """Serve the tracking UI (single-file HTML, no build step)."""
+    return FileResponse(_STATIC_DIR / "index.html")
 
 
 @app.get("/health")
