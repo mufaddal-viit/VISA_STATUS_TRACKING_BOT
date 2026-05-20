@@ -79,6 +79,19 @@ async def index():
     return FileResponse(_STATIC_DIR / "index.html")
 
 
+@app.get("/favicon.svg", include_in_schema=False)
+async def favicon_svg():
+    """Serve the favicon. Modern browsers prefer SVG and scale it perfectly."""
+    return FileResponse(_STATIC_DIR / "favicon.svg", media_type="image/svg+xml")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon_ico():
+    """Fallback for clients that still hard-request /favicon.ico — serve the
+    same SVG. All current browsers accept SVG content under the .ico path."""
+    return FileResponse(_STATIC_DIR / "favicon.svg", media_type="image/svg+xml")
+
+
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}

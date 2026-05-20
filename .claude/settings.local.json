@@ -44,7 +44,8 @@
       "Bash(python -c \"import ast; [ast.parse\\(open\\(f\\).read\\(\\)\\) for f in ['app/main.py','app/models.py','app/vfs_tracker.py','app/captcha/chain.py']]; print\\('all files parse OK'\\)\")",
       "Bash(python -c \"import ast; [ast.parse\\(open\\(f\\).read\\(\\)\\) for f in ['app/main.py','app/vfs_tracker.py']]; print\\('parse OK'\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('app/vfs_tracker.py'\\).read\\(\\)\\); print\\('parse OK'\\)\")",
-      "Bash(python -c \"from app.main import app; print\\('OK'\\); print\\([r.path for r in app.routes if hasattr\\(r, 'path'\\)][:8]\\)\")"
+      "Bash(python -c \"from app.main import app; print\\('OK'\\); print\\([r.path for r in app.routes if hasattr\\(r, 'path'\\)][:8]\\)\")",
+      "Bash(python -c ' *)"
     ]
   }
 }
