@@ -45,14 +45,18 @@ REFERENCE_NUMBER_INPUT = SelectorGroup(
 
 LAST_NAME_INPUT = SelectorGroup(
     candidates=[
-        # New markup is expected to follow the same rename pattern
-        # (most VFS deployments rename all form fields together).
-        "#LastName",
+        # name='LastName' is the most stable across VFS country pages and
+        # has no whitespace gotcha — try it first so the fast path is O(1).
         "input[name='LastName']",
+        # Current markup uses id="Last Name" (with a literal space — yes,
+        # VFS really did that). `#LastName` will NOT match this; we need
+        # an attribute selector or a CSS-escaped id.
+        "input[id='Last Name']",
+        "#LastName",  # legacy markup, kept as fallback
         "input[placeholder='Last Name']",
         # Common alternates seen on a few country sites.
-        "#Surname",
         "input[name='Surname']",
+        "#Surname",
         "input[placeholder='Surname']",
     ]
 )

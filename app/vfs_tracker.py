@@ -17,6 +17,7 @@ from playwright.async_api import (
     BrowserContext,
     Locator,
     Page,
+    TimeoutError as PlaywrightTimeoutError,
     async_playwright,
 )
 
@@ -44,8 +45,15 @@ logger = structlog.get_logger(__name__)
 # Selector resolution helper
 # ---------------------------------------------------------------------------
 
-async def _resolve_selector(page: Page, group: SelectorGroup, timeout: int = 5000) -> Locator | None:
-    """Try each candidate selector and return the first visible locator found."""
+async def _resolve_selector(page: Page, group: SelectorGroup, timeout: int = 2000) -> Locator | None:
+    """Try each candidate selector and return the first visible locator found.
+
+    The default per-candidate timeout is intentionally tight (2s): the element
+    we want is either on the page already or it isn't. Long timeouts here used
+    to silently burn 30s+ when a legacy id at the top of the list didn't match
+    on a newly-redesigned page. Callers that genuinely need to wait for an
+    element to appear should pass a larger timeout explicitly.
+    """
     for selector in group.candidates:
         try:
             locator = page.locator(selector).first
@@ -57,9 +65,14 @@ async def _resolve_selector(page: Page, group: SelectorGroup, timeout: int = 500
 
 
 async def _resolve_selector_strict(
-    page: Page, group: SelectorGroup, name: str, timeout: int = 10000
+    page: Page, group: SelectorGroup, name: str, timeout: int = 3000
 ) -> Locator:
-    """Like _resolve_selector but raises if nothing found."""
+    """Like _resolve_selector but raises if nothing found.
+
+    Default per-candidate timeout is 3s — enough for a real element that's
+    a frame behind its parent, short enough that a 5-candidate group can't
+    burn more than ~15s in the worst case.
+    """
     locator = await _resolve_selector(page, group, timeout=timeout)
     if locator is None:
         raise TrackingError(
@@ -72,6 +85,8 @@ async def _resolve_selector_strict(
 # ---------------------------------------------------------------------------
 # Captcha image capture
 # ---------------------------------------------------------------------------
+
+from playwright._impl._errors import TargetClosedError
 
 async def _get_captcha_bytes(page: Page, captcha_img: Locator, log) -> bytes:
     """Return the raw captcha image bytes from the ALREADY-LOADED <img>.
@@ -87,10 +102,13 @@ async def _get_captcha_bytes(page: Page, captcha_img: Locator, log) -> bytes:
     handle = await captcha_img.element_handle()
     try:
         await page.wait_for_function(
-            """el => el.complete && el.naturalWidth > 0 && el.naturalHeight > 0""",
+            "el => el.complete && el.naturalWidth > 0 && el.naturalHeight > 0",
             arg=handle,
             timeout=10000,
         )
+    except TargetClosedError:
+        log.warning("captcha_decode_wait_browser_closed")
+        raise  # browser is gone — nothing to fall back to, let caller handle
     except Exception:
         log.warning("captcha_image_decode_wait_timed_out")
 
@@ -113,14 +131,21 @@ async def _get_captcha_bytes(page: Page, captcha_img: Locator, log) -> bytes:
             if body:
                 log.info("captcha_captured_via_canvas", bytes=len(body))
                 return body
+    except TargetClosedError:
+        log.warning("captcha_canvas_capture_browser_closed")
+        raise  # browser gone mid-evaluate — fallback is pointless, propagate up
     except Exception as exc:
         log.warning("captcha_canvas_capture_failed", error=str(exc))
 
-    # 3. Fallback: element screenshot (after a settle so paint completes).
-    await page.wait_for_timeout(500)
-    log.info("captcha_captured_via_screenshot")
-    return await captcha_img.screenshot()
-
+    # 3. Fallback: element screenshot.
+    # NOTE: skip wait_for_timeout — if we're here the browser is marginal;
+    # an extra 500 ms sleep is what caused the previous TargetClosedError crash.
+    try:
+        log.info("captcha_captured_via_screenshot")
+        return await captcha_img.screenshot()
+    except TargetClosedError:
+        log.warning("captcha_screenshot_fallback_browser_closed")
+        raise
 
 # ---------------------------------------------------------------------------
 # Core automation
@@ -171,21 +196,33 @@ async def check_vfs_status(
             page.set_default_timeout(settings.browser_timeout)
 
             # 1. Navigate
-            await page.goto(tracking_url, wait_until="networkidle")
+            # Use `domcontentloaded` instead of `networkidle` — VFS keeps firing
+            # analytics/Cloudflare beacons long after the form is interactive,
+            # which makes `networkidle` wait the full timeout for no reason.
+            # We then explicitly wait for the form itself to appear so we know
+            # the page is actually ready, not just done with its first paint.
+            try:
+                await page.goto(tracking_url, wait_until="domcontentloaded")
+                # Cover both current (#RefNo) and legacy (#AppRefNo) markup.
+                await page.wait_for_selector("#RefNo, #AppRefNo", timeout=15_000)
+            except PlaywrightTimeoutError as exc:
+                raise TrackingError(
+                    "The VFS tracking page took too long to load. "
+                    "This usually means the VFS site is slow or under maintenance — "
+                    "please try again in a few minutes."
+                ) from exc
             log.info("page_loaded")
 
-            # 2. Fill form fields (1s pause between fields to mimic human input)
+            # 2. Fill form fields
             ref_input = await _resolve_selector_strict(
                 page, REFERENCE_NUMBER_INPUT, "reference_number"
             )
             await ref_input.fill(reference_number)
-            await page.wait_for_timeout(1000)
 
             last_name_input = await _resolve_selector_strict(
                 page, LAST_NAME_INPUT, "last_name"
             )
             await last_name_input.fill(last_name)
-            await page.wait_for_timeout(1000)
 
             log.info("form_filled")
 
@@ -222,7 +259,6 @@ async def check_vfs_status(
                 )
                 await captcha_input.fill("")  # clear any previous value
                 await captcha_input.fill(captcha_text)
-                await page.wait_for_timeout(1000)
 
                 # Submit
                 submit_btn = await _resolve_selector_strict(
@@ -230,8 +266,31 @@ async def check_vfs_status(
                 )
                 await submit_btn.click()
 
-                # Wait for navigation / result
-                await page.wait_for_load_state("networkidle")
+                # Wait for the actual result instead of `networkidle`.
+                # After submit, exactly one of three things appears:
+                #   - blue/bold status div  (success — STATUS_RESULT)
+                #   - .validation-summary-errors  (CAPTCHA_ERROR)
+                #   - blue/bold "Invalid Inputs." div  (INVALID_INPUTS_ERROR)
+                # Race them so we proceed the moment any one shows up.
+                try:
+                    await page.wait_for_function(
+                        """() => {
+                            const blue = document.querySelector(
+                                "div[style*='color: blue'] > b, div[style*='color:blue'] > b"
+                            );
+                            const err = document.querySelector(
+                                ".validation-summary-errors"
+                            );
+                            return !!(blue || err);
+                        }""",
+                        timeout=20_000,
+                    )
+                except PlaywrightTimeoutError as exc:
+                    raise TrackingError(
+                        "VFS did not respond after submitting the form. "
+                        "The tracking site may be temporarily unavailable — "
+                        "please try again in a few minutes."
+                    ) from exc
 
                 # Check for "Invalid Inputs." — wrong reference/last name. The page
                 # also shows a reCAPTCHA v2 widget here which we cannot auto-solve,
@@ -317,10 +376,16 @@ async def check_vfs_status(
             raise
 
         finally:
-            if context:
-                await context.close()
-            await browser.close()
-            log.info("browser_closed")
+            if context is not None:
+                try:
+                    await context.close()
+                except Exception as e:
+                    logger.warning("context_close_failed", error=str(e))
+            if browser is not None:
+                try:
+                    await browser.close()
+                except Exception as e:
+                    logger.warning("browser_close_failed", error=str(e))
 
 
 # ---------------------------------------------------------------------------
@@ -358,8 +423,6 @@ async def capture_captcha_image(
             await page.goto(tracking_url, wait_until="networkidle")
 
             if full_page:
-                # Wait for the captcha <img> to decode first, so the full-page
-                # shot reflects the same moment the solver would capture.
                 captcha_img = await _resolve_selector(page, CAPTCHA_IMAGE, timeout=5000)
                 if captcha_img is not None:
                     try:
@@ -378,10 +441,16 @@ async def capture_captcha_image(
             )
             return await _get_captcha_bytes(page, captcha_img, log)
         finally:
-            if context:
-                await context.close()
-            await browser.close()
-
+            # Guard every close — the browser may already be gone.
+            if context is not None:
+                try:
+                    await context.close()
+                except Exception as e:
+                    log.warning("context_close_failed", error=str(e))
+            try:
+                await browser.close()
+            except Exception as e:
+                log.warning("browser_close_failed", error=str(e))
 
 async def inspect_captcha_dom(tracking_url: str, settings: Settings) -> dict:
     """Open the tracking page and report every <img> on it + the captcha selector hit.

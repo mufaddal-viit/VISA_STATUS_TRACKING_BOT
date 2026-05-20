@@ -19,6 +19,7 @@ if sys.platform == "win32":
 import structlog
 from fastapi import FastAPI, HTTPException, Path, Query
 from fastapi.responses import JSONResponse, Response
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from app.config import VFS_TRACKING_URLS, get_settings, get_tracking_url
 from app.logging_config import setup_logging
@@ -222,6 +223,18 @@ async def check_status(
                 detail={"error": str(exc), "debug_attempts": exc.debug_attempts},
             ) from exc
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except PlaywrightTimeoutError as exc:
+        # Any Playwright timeout that wasn't caught and converted to a
+        # TrackingError inside check_vfs_status — surface as a clean,
+        # client-friendly 422 instead of a raw 500.
+        log.warning("tracking_timeout", error=str(exc))
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "The VFS tracking site is responding too slowly to complete the check. "
+                "Please try again in a few minutes."
+            ),
+        ) from exc
     except Exception as exc:
         log.exception("tracking_unexpected_error")
         raise HTTPException(
