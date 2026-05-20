@@ -30,6 +30,13 @@ class SelectorGroup:
 
 REFERENCE_NUMBER_INPUT = SelectorGroup(
     candidates=[
+        # New (current) VFS markup, e.g.
+        #   <input id="RefNo" name="RefNo" placeholder="Reference Number" ...>
+        "#RefNo",
+        "input[name='RefNo']",
+        "input[placeholder='Reference Number']",
+        # Legacy markup — kept as fallback in case some country pages
+        # are still on the older template.
         "#AppRefNo",
         "input[name='AppRefNo']",
         "input[placeholder='Application Reference Number']",
@@ -38,8 +45,15 @@ REFERENCE_NUMBER_INPUT = SelectorGroup(
 
 LAST_NAME_INPUT = SelectorGroup(
     candidates=[
+        # New markup is expected to follow the same rename pattern
+        # (most VFS deployments rename all form fields together).
+        "#LastName",
         "input[name='LastName']",
         "input[placeholder='Last Name']",
+        # Common alternates seen on a few country sites.
+        "#Surname",
+        "input[name='Surname']",
+        "input[placeholder='Surname']",
     ]
 )
 
