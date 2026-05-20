@@ -74,15 +74,28 @@ SUBMIT_BUTTON = SelectorGroup(
 
 STATUS_RESULT = SelectorGroup(
     candidates=[
+        # VFS renders the result as a blue, bold one-liner, e.g.
+        #   <div style="color: blue;">
+        #     <b>Visa Application has been submitted and is under process
+        #        at the Visa Application Centre.</b>
+        #   </div>
+        # We target the <b> directly so text_content() yields just the
+        # status message (no stray whitespace from the wrapping div).
+        # The "Invalid Inputs." error uses the same blue-bold pattern, so
+        # we exclude it explicitly to avoid mis-classifying a rejection
+        # as a status.
+        "div[style*='color: blue'] > b:not(:has-text('Invalid Inputs'))",
+        "div[style*='color:blue'] > b:not(:has-text('Invalid Inputs'))",
+        # Looser fall-backs in case VFS tweaks the markup but keeps the wording.
+        "b:has-text('Visa Application')",
+        "b:has-text('under process')",
+        "b:has-text('Application has been')",
+        # Legacy / other-country layouts (kept last — none of these were
+        # ever observed in production but they are cheap to try).
         "#lblStatus",
         ".application-status",
-        "[class*='status' i]",
         "#divResult",
-        ".result",
         ".tracking-result",
-        ".panel-body",
-        "table.table tr",
-        "#result",
     ]
 )
 

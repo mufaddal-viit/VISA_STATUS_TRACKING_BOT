@@ -486,22 +486,40 @@ async def inspect_captcha_dom(tracking_url: str, settings: Settings) -> dict:
 # ---------------------------------------------------------------------------
 
 async def _extract_status(page: Page) -> str:
-    """Pull the main status text from the results area."""
+    """Pull the main status text from the results area.
+
+    VFS renders the status as a multi-line bold inside a blue div, e.g.
+
+        <div style="color: blue;">
+            <b>Visa Application has been submitted and is under process
+               at the Visa Application Centre.</b>
+        </div>
+
+    text_content() preserves the source whitespace/indentation, so we
+    collapse internal whitespace into single spaces to get a clean
+    single-line message suitable for the API response.
+    """
     locator = await _resolve_selector(page, STATUS_RESULT, timeout=10000)
     if locator is None:
         # Fallback: try to find any prominent text on the page that looks like a status
         body_text = await page.inner_text("body")
-        for keyword in ("Your application status", "Status:", "Application Status"):
+        for keyword in (
+            "Visa Application has been",
+            "Your application status",
+            "Status:",
+            "Application Status",
+        ):
             idx = body_text.find(keyword)
             if idx != -1:
                 snippet = body_text[idx : idx + 300].strip()
-                return snippet
+                return " ".join(snippet.split())
         raise TrackingError("Could not find application status on the page")
 
     text = (await locator.text_content() or "").strip()
     if not text:
         text = (await locator.inner_text()).strip()
-    return text
+    # Collapse the embedded newlines/indentation from the HTML source.
+    return " ".join(text.split())
 
 
 async def _extract_status_details(page: Page) -> str | None:
