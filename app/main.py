@@ -188,6 +188,20 @@ async def check_status(
             f"Supported: {list(VFS_TRACKING_URLS.keys())}",
         )
 
+    # Reject countries hosted on vfsvisaonline.com — their pages have
+    # heavier anti-bot interstitials and the full check routinely exceeds
+    # our 60s Vercel function budget (vercel.json:maxDuration), producing
+    # FUNCTION_INVOCATION_TIMEOUT. Surface a clear manual-fallback message
+    # to the caller instead of timing out.
+    if "vfsvisaonline.com" in tracking_url.lower():
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"This country cannot be checked, please check it manually "
+                f"with url: {tracking_url}"
+            ),
+        )
+
     log = logger.bind(country=country, reference_number=body.reference_number)
     log.info("tracking_request_received")
 
