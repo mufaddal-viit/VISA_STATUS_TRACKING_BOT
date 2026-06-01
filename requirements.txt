@@ -7,6 +7,7 @@ python-dotenv==1.0.1
 structlog==24.4.0
 httpx==0.28.1
 openai==1.59.5
+motor==3.6.0
 # NOTE: On Vercel we connect to a remote browser via Browserless.io, so the
 # Chromium binary is NOT installed (the `playwright install` step is skipped).
 # The `playwright` Python package itself is still required for the client API.

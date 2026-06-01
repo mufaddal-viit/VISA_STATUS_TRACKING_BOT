@@ -8,24 +8,36 @@ Run with:
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import AsyncIterator
 
-# Playwright requires SelectorEventLoop on Windows; uvicorn defaults to ProactorEventLoop
+# Playwright's async driver spawns a Node subprocess, which on Windows requires
+# the ProactorEventLoop (the Selector loop raises NotImplementedError for
+# subprocesses). No-op off Windows (e.g. Vercel/GitHub Linux runners).
 if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 from pathlib import Path as _FsPath
 
 import structlog
-from fastapi import FastAPI, HTTPException, Path, Query
+from fastapi import FastAPI, Header, HTTPException, Path, Query
 from fastapi.responses import FileResponse, JSONResponse, Response
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from app.config import VFS_TRACKING_URLS, get_settings, get_tracking_url
+from app.db import ensure_indexes, visa_tracking
 from app.logging_config import setup_logging
-from app.models import ErrorResponse, TrackingError, TrackingRequest, TrackingResponse
+from app.sweep import PENDING, run_sweep
+from app.models import (
+    ErrorResponse,
+    TrackingError,
+    TrackingRequest,
+    TrackingResponse,
+    TrackRequest,
+)
 from app.vfs_tracker import (
     capture_captcha_image,
     check_vfs_status,
@@ -49,6 +61,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         headless=settings.headless,
         supported_countries=list(VFS_TRACKING_URLS.keys()),
     )
+
+    # Create the unique (deal_id, reference_number) index at startup. Wrapped so
+    # a missing/unreachable MongoDB never blocks the captcha-only endpoints; the
+    # watchlist endpoints also re-attempt this lazily on first use.
+    try:
+        await ensure_indexes()
+    except Exception:
+        logger.warning("index_setup_skipped", exc_info=True)
+
     yield
     logger.info("app_shutdown")
 
@@ -274,6 +295,55 @@ async def check_status(
         status_details=result.get("status_details"),
         debug_attempts=result.get("debug_attempts") if body.debug else None,
     )
+
+
+# ---------------------------------------------------------------------------
+# Watchlist: add-to-track + twice-daily cron sweep
+# ---------------------------------------------------------------------------
+
+@app.post("/api/track", status_code=202)
+async def track(body: TrackRequest):
+    """
+    Add an application to the watchlist and return immediately (202).
+
+    No checking happens here — the twice-daily cron does that. Upsert with
+    $setOnInsert makes re-submitting the same (deal_id, reference_number) a
+    no-op, so the caller can fire this idempotently.
+    """
+    await ensure_indexes()
+    await visa_tracking().update_one(
+        {"deal_id": body.deal_id, "reference_number": body.reference_number},
+        {
+            "$setOnInsert": {
+                "deal_id": body.deal_id,
+                "reference_number": body.reference_number,
+                "last_name": body.last_name,
+                "country": body.country.lower().strip(),
+                "status": PENDING,
+                "last_checked_at": None,
+                "created_at": datetime.now(timezone.utc),
+            }
+        },
+        upsert=True,
+    )
+    return {"status": "tracking"}
+
+
+@app.get("/api/cron/check")
+async def cron_check(authorization: str | None = Header(default=None)):
+    """
+    Manual / backup trigger for the watchlist sweep, guarded by CRON_SECRET.
+
+    NOTE: the *primary* trigger is the GitHub Actions workflow
+    (`python -m app.sweep`), which has no 60s function limit. On Vercel's Hobby
+    plan this endpoint will be killed at 60s, so it only fully clears the
+    watchlist when there are very few PENDING rows — it's here for manual
+    single-shot runs and debugging, not the scheduled job.
+    """
+    expected = os.environ.get("CRON_SECRET", "")
+    if not expected or authorization != f"Bearer {expected}":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return await run_sweep()
 
 
 # ---------------------------------------------------------------------------

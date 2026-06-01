@@ -26,6 +26,15 @@ class TrackingRequest(BaseModel):
     )
 
 
+class TrackRequest(BaseModel):
+    """Payload for adding an application to the twice-daily watchlist."""
+
+    deal_id: str = Field(..., min_length=1, max_length=100, description="CRM deal id (used in the deal link)")
+    reference_number: str = Field(..., min_length=1, max_length=100, description="VFS application reference number")
+    last_name: str = Field(..., min_length=1, max_length=100, description="Applicant last name as on the application")
+    country: str = Field(..., min_length=1, max_length=50, description="Country key, see /v1/vfs-tracking/supported-countries")
+
+
 class CaptchaAttempt(BaseModel):
     """Debug record for a single captcha solve attempt."""
 
