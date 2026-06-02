@@ -24,17 +24,20 @@ import structlog
 
 from app import telegram
 from app.config import get_settings, get_tracking_url
-from app.db import ensure_indexes, visa_tracking
+from app.db import ensure_indexes, sweep_runs, visa_tracking
 from app.models import TrackingError
 from app.vfs_tracker import check_vfs_status
 
 logger = structlog.get_logger(__name__)
 
-# The three watchlist states. PENDING docs are re-checked every sweep; the two
-# terminal states drop out of the PENDING filter so they're never checked again.
+# Watchlist states. Only PENDING docs are re-checked every sweep; all the other
+# (terminal) states drop out of the PENDING filter so they're never checked
+# again. NOT_FOUND means VFS doesn't recognise the reference (usually a typo) —
+# terminal so a bad reference doesn't loop forever; surfaces for a human to fix.
 PENDING = "PENDING"
 APPROVED = "APPROVED"
 REJECTED = "REJECTED"
+NOT_FOUND = "NOT_FOUND"
 
 # How many rows to check at once. The sweep runs local headless Chromium on the
 # GitHub runner (2 vCPUs), so keep this small; 2 is comfortable. (If a run ever
@@ -44,7 +47,7 @@ MAX_CONCURRENCY = 2
 
 def classify_status(status_text: str) -> str:
     """
-    Map the free-text status returned by VFS into one of our three states.
+    Map the free-text status returned by VFS into one of our watchlist states.
 
     VFS phrasing varies by country, so this is intentionally keyword-based and
     lives in one place — tweak the marker lists here if a country's wording
@@ -52,6 +55,10 @@ def classify_status(status_text: str) -> str:
     wrongly marked terminal.
     """
     t = (status_text or "").lower()
+    # "NO RECORDS FOUND" — VFS doesn't know this reference (usually a typo).
+    # Terminal so it stops being re-checked every sweep.
+    if "no record" in t:
+        return NOT_FOUND
     # Order matters: "not approved" contains "approved", so check rejection first.
     if any(m in t for m in ("reject", "refus", "not approved", "declin")):
         return REJECTED
@@ -119,8 +126,24 @@ async def _check_one(doc, settings, coll, counters: dict, sem: asyncio.Semaphore
                 await _safe_notify(ref, status_text, doc["deal_id"])
 
         except Exception as exc:  # noqa: BLE001 — contain failures to this one row
-            # Leave the doc PENDING so it retries on the next sweep.
+            # Record the error in status_text (prefixed + truncated) and stamp the
+            # attempt, so a failing row is visible. Status stays PENDING so it's
+            # retried next sweep — most check failures (slow site, captcha miss,
+            # timeout) are transient and shouldn't permanently stop tracking.
             log.warning("sweep_check_failed", error=str(exc))
+            try:
+                await coll.update_one(
+                    {"_id": doc["_id"]},
+                    {
+                        "$set": {
+                            "status_text": f"ERROR: {str(exc)[:500]}",
+                            "last_checked_at": datetime.now(timezone.utc),
+                        }
+                    },
+                )
+            except Exception:  # noqa: BLE001 — e.g. Mongo write itself failed
+                logger.warning("sweep_error_write_failed", exc_info=True)
+            counters["errors"] += 1
             await _safe_log(f"error checking {ref} ({country}): {exc}")
 
 
@@ -130,16 +153,35 @@ async def run_sweep() -> dict:
     settings = get_settings()
     coll = visa_tracking()
 
+    started_at = datetime.now(timezone.utc)
     pending = await coll.find({"status": PENDING}).to_list(length=None)
-    counters = {"checked": 0, "resolved": 0}
+    counters = {"checked": 0, "resolved": 0, "errors": 0}
     sem = asyncio.Semaphore(MAX_CONCURRENCY)
 
     await asyncio.gather(
         *(_check_one(doc, settings, coll, counters, sem) for doc in pending)
     )
 
+    # Record this run so the dashboard can show "last run / last successful run".
+    # Best-effort: never let a history-write failure fail the sweep itself.
+    run = {
+        "started_at": started_at,
+        "finished_at": datetime.now(timezone.utc),
+        "checked": counters["checked"],
+        "resolved": counters["resolved"],
+        "errors": counters["errors"],
+    }
+    try:
+        await sweep_runs().insert_one(dict(run))
+    except Exception:  # noqa: BLE001
+        logger.warning("sweep_run_record_failed", exc_info=True)
+
     logger.info("sweep_complete", **counters)
-    return {"checked": counters["checked"], "resolved": counters["resolved"]}
+    return {
+        "checked": counters["checked"],
+        "resolved": counters["resolved"],
+        "errors": counters["errors"],
+    }
 
 
 async def _safe_log(text: str) -> None:

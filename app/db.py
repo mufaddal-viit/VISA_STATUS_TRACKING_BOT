@@ -20,6 +20,7 @@ _client: AsyncIOMotorClient | None = None
 _indexes_ready = False
 
 COLLECTION_NAME = "visa_tracking"
+RUNS_COLLECTION_NAME = "sweep_runs"
 
 
 def _get_client() -> AsyncIOMotorClient:
@@ -38,6 +39,12 @@ def visa_tracking() -> AsyncIOMotorCollection:
     """Return the watchlist collection (uses the default DB from MONGODB_URI)."""
     db = _get_client().get_default_database(default="visa_tracker")
     return db[COLLECTION_NAME]
+
+
+def sweep_runs() -> AsyncIOMotorCollection:
+    """Return the sweep-run history collection (one small doc per sweep)."""
+    db = _get_client().get_default_database(default="visa_tracker")
+    return db[RUNS_COLLECTION_NAME]
 
 
 async def ensure_indexes() -> None:

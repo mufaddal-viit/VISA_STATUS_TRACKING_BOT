@@ -32,7 +32,7 @@ VFS_TRACKING_URLS: dict[str, str] = {
     "iceland": "https://visatracking.vfsglobal.com/Global-Passporttracking/Track/Index?q=shSA0YnE4pLF9Xzwon/x/LZichRNvadRezZVFEYcVI60hn/qmtP4d3S1GWHyZTsibhIqWlsDm1rEPZbRXPW1z7KrWJx5YAc93TPDL3yQ8vg=",
     "italy": "https://visatracking.vfsglobal.com/Global-Passporttracking/Track/Index?q=shSA0YnE4pLF9Xzwon/x/NBWviHzkZm/Vty3IMuNZFf56G+QTtO86CLB7+plquVaHrFd0ZevBpiA2DZyzWNsUw==",
     "latvia": "https://visatracking.vfsglobal.com/Global-Passporttracking/Track/Index?q=shSA0YnE4pLF9Xzwon/x/H4U4Yoxvegz1LFctYtWZRfI62JQCrj2NXrFipZADwMY9sDjbXnkQOdKvIFaJB1bot/z0fXtpuPmmc3NmFuZj4Y=",
-    "lithuania": "https://www.vfsvisaonline.com/Global-Passporttracking/Track/Index?q=",
+    # "lithuania": "https://www.vfsvisaonline.com/Global-Passporttracking/Track/Index?q=",
     "luxembourg": "https://visatracking.vfsglobal.com/Global-Passporttracking/Track/Index?q=shSA0YnE4pLF9Xzwon/x/Kd1F6s3re+hCX/0P4gAq8dza8YZ0Cuj8jgFzk/mZbpem1o2RTsMWzHqGYlc70gjCkTAjc077Gfg9DGSyqvHJ9I=",
     "maltaLS": "https://visatracking.vfsglobal.com/Global-Passporttracking/Track/Index?q=shSA0YnE4pLF9Xzwon/x/OVMz2fDVFo4HOHOD9+ZsS2aHQ5OzxnlPZonjofTOFmXYjYZNB/WcybRu22/pkuUnPy3m9t88oUBEcQpT0qRopVJU9MCU6qsx82CKbm6/fuq",
     "maltaSS":"https://visatracking.vfsglobal.com/Global-Passporttracking/Track/Index?q=shSA0YnE4pLF9Xzwon/x/Ax78BwNOVdHIB9TfH0Prkk6tYGVZccJwS5aZlRMwZ9ID09X/A+DlU97cf/yVfG62g==",

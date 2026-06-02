@@ -11,7 +11,7 @@ import asyncio
 import os
 import sys
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import AsyncIterator
 
 # Playwright's async driver spawns a Node subprocess, which on Windows requires
@@ -22,13 +22,14 @@ if sys.platform == "win32":
 
 from pathlib import Path as _FsPath
 
+import httpx
 import structlog
 from fastapi import FastAPI, Header, HTTPException, Path, Query
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from app.config import VFS_TRACKING_URLS, get_settings, get_tracking_url
-from app.db import ensure_indexes, visa_tracking
+from app.db import ensure_indexes, sweep_runs, visa_tracking
 from app.logging_config import setup_logging
 from app.sweep import PENDING, run_sweep
 from app.models import (
@@ -96,8 +97,20 @@ _STATIC_DIR = _FsPath(__file__).parent / "static"
 
 @app.get("/", include_in_schema=False)
 async def index():
-    """Serve the tracking UI (single-file HTML, no build step)."""
-    return FileResponse(_STATIC_DIR / "index.html")
+    """Root → the dashboard (the hub; check-status / add-tracking link from there)."""
+    return RedirectResponse(url="/dashboard")
+
+
+@app.get("/check-status", include_in_schema=False)
+async def check_status_page():
+    """One-off status check form (does NOT save to the watchlist)."""
+    return FileResponse(_STATIC_DIR / "check-status.html")
+
+
+@app.get("/add-tracking", include_in_schema=False)
+async def add_tracking_page():
+    """Add-to-watchlist form (4 fields → POST /api/track)."""
+    return FileResponse(_STATIC_DIR / "add-tracking.html")
 
 
 @app.get("/favicon.svg", include_in_schema=False)
@@ -234,19 +247,11 @@ async def check_status(
             f"Supported: {list(VFS_TRACKING_URLS.keys())}",
         )
 
-    # Reject countries hosted on vfsvisaonline.com — their pages have
-    # heavier anti-bot interstitials and the full check routinely exceeds
-    # our 60s Vercel function budget (vercel.json:maxDuration), producing
-    # FUNCTION_INVOCATION_TIMEOUT. Surface a clear manual-fallback message
-    # to the caller instead of timing out.
-    if "vfsvisaonline.com" in tracking_url.lower():
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"This country cannot be checked, please check it manually "
-                f"with url: {tracking_url}"
-            ),
-        )
+    # NOTE: vfsvisaonline.com countries (Sweden, Denmark, etc.) use the SAME
+    # tracking-page template as vfsglobal.com (same selectors, same image
+    # captcha), so they go through the identical flow below. On Vercel's 60s
+    # cap a slow check may still time out — the watchlist sweep on GitHub
+    # Actions is the reliable path for these.
 
     log = logger.bind(country=country, reference_number=body.reference_number)
     log.info("tracking_request_received")
@@ -344,6 +349,151 @@ async def cron_check(authorization: str | None = Header(default=None)):
     if not expected or authorization != f"Bearer {expected}":
         raise HTTPException(status_code=401, detail="Unauthorized")
     return await run_sweep()
+
+
+# ---------------------------------------------------------------------------
+# Dashboard — read-only view of the watchlist
+# ---------------------------------------------------------------------------
+
+# The two daily sweep times in UTC. Mirrors the cron in
+# .github/workflows/visa-sweep.yml (10:00 & 17:00 Dubai = 06:00 & 13:00 UTC).
+# Used only to show "next run" on the dashboard.
+SWEEP_UTC_HOURS = (6, 13)
+
+
+def _iso(dt: datetime | None) -> str | None:
+    return dt.isoformat() if dt else None
+
+
+def _display_status(status: str, status_text: str | None) -> str:
+    """The status shown in the UI. A PENDING row whose last check errored is
+    surfaced as ERROR so failures are visible at a glance."""
+    if status == PENDING and isinstance(status_text, str) and status_text.startswith("ERROR:"):
+        return "ERROR"
+    return status
+
+
+def _next_run_utc(now: datetime) -> datetime:
+    """Next scheduled sweep at or after `now`, from SWEEP_UTC_HOURS."""
+    candidates = [
+        (now + timedelta(days=d)).replace(hour=h, minute=0, second=0, microsecond=0)
+        for d in (0, 1)
+        for h in SWEEP_UTC_HOURS
+    ]
+    return min(t for t in candidates if t > now)
+
+
+@app.get("/dashboard", include_in_schema=False)
+async def dashboard():
+    """Serve the watchlist dashboard (single-file HTML, fetches /api/watchlist)."""
+    return FileResponse(_STATIC_DIR / "dashboard.html")
+
+
+@app.get("/api/watchlist")
+async def watchlist():
+    """All watchlist rows + a summary, last sweep run, and next scheduled run."""
+    docs = await visa_tracking().find({}).sort("created_at", -1).to_list(length=None)
+
+    rows = []
+    counts: dict[str, int] = {}
+    for d in docs:
+        display = _display_status(d.get("status", PENDING), d.get("status_text"))
+        counts[display] = counts.get(display, 0) + 1
+        rows.append(
+            {
+                "deal_id": d.get("deal_id"),
+                "reference_number": d.get("reference_number"),
+                "last_name": d.get("last_name"),
+                "country": d.get("country"),
+                "status": d.get("status"),
+                "display_status": display,
+                "status_text": d.get("status_text"),
+                "last_checked_at": _iso(d.get("last_checked_at")),
+                "created_at": _iso(d.get("created_at")),
+            }
+        )
+
+    last_run_doc = await sweep_runs().find_one(sort=[("finished_at", -1)])
+    last_run = (
+        {
+            "started_at": _iso(last_run_doc.get("started_at")),
+            "finished_at": _iso(last_run_doc.get("finished_at")),
+            "checked": last_run_doc.get("checked"),
+            "resolved": last_run_doc.get("resolved"),
+            "errors": last_run_doc.get("errors"),
+        }
+        if last_run_doc
+        else None
+    )
+
+    now = datetime.now(timezone.utc)
+    return {
+        "rows": rows,
+        "summary": {"total": len(rows), "by_status": counts},
+        "last_run": last_run,
+        "next_run": _iso(_next_run_utc(now)),
+        "server_time": _iso(now),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Manually trigger the GitHub Actions sweep (workflow_dispatch)
+# ---------------------------------------------------------------------------
+
+# Where the sweep workflow lives. Overridable via env; defaults match this repo.
+GITHUB_REPO = os.environ.get("GITHUB_REPO", "mufaddal-viit/VISA_STATUS_TRACKING_BOT")
+GITHUB_WORKFLOW_FILE = os.environ.get("GITHUB_WORKFLOW_FILE", "visa-sweep.yml")
+GITHUB_WORKFLOW_REF = os.environ.get("GITHUB_WORKFLOW_REF", "captcha-api")
+
+
+@app.post("/api/run-sweep")
+async def run_sweep_dispatch():
+    """
+    Kick off the GitHub Actions sweep immediately (the same job that runs on
+    schedule), via GitHub's workflow_dispatch API.
+
+    Requires a GITHUB_TOKEN env var — a fine-grained PAT with "Actions:
+    read and write" on the repo. The workflow file must exist on
+    GITHUB_WORKFLOW_REF (the default branch). Returns 202 on dispatch; watch the
+    repo's Actions tab for the run.
+    """
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if not token:
+        raise HTTPException(
+            status_code=500,
+            detail="GITHUB_TOKEN is not configured on the server, so the sweep "
+            "can't be triggered from here. Run it from the GitHub Actions tab instead.",
+        )
+
+    url = (
+        f"https://api.github.com/repos/{GITHUB_REPO}"
+        f"/actions/workflows/{GITHUB_WORKFLOW_FILE}/dispatches"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+                json={"ref": GITHUB_WORKFLOW_REF},
+            )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Could not reach GitHub: {exc}") from exc
+
+    # GitHub returns 204 No Content on a successful dispatch.
+    if resp.status_code == 204:
+        logger.info("sweep_dispatched", ref=GITHUB_WORKFLOW_REF)
+        return JSONResponse(
+            status_code=202,
+            content={"status": "dispatched", "ref": GITHUB_WORKFLOW_REF},
+        )
+    raise HTTPException(
+        status_code=502,
+        detail=f"GitHub dispatch failed ({resp.status_code}): {resp.text[:300]}",
+    )
 
 
 # ---------------------------------------------------------------------------
