@@ -72,7 +72,11 @@
       "PowerShell(.\\\\venv\\\\Scripts\\\\python.exe _smoke_inspect.py clean)",
       "PowerShell(.\\\\venv\\\\Scripts\\\\python.exe -m app.sweep)",
       "PowerShell(.\\\\venv\\\\Scripts\\\\python.exe _smoke_inspect.py)",
-      "Bash(git restore *)"
+      "Bash(git restore *)",
+      "PowerShell(.\\\\venv\\\\Scripts\\\\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --log-level warning)",
+      "PowerShell(.\\\\venv\\\\Scripts\\\\python.exe -m playwright install chromium)",
+      "PowerShell(.\\\\venv\\\\Scripts\\\\python.exe _smoke_local.py)",
+      "PowerShell(.\\\\venv\\\\Scripts\\\\python.exe _smoke_check.py)"
     ]
   }
 }

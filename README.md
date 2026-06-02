@@ -134,21 +134,26 @@ collection, one add endpoint, and a sweep job.
 
 ### Why the sweep runs on GitHub Actions (not Vercel cron)
 
-Each row takes ~50–55s of slow remote-browser work. On Vercel's **Hobby** plan
-that runs into two hard limits: functions are killed at **60s** (so barely one
-row fits), and Hobby cron jobs only fire ~once/day. So the sweep runs as a
+Each row takes ~50–60s of slow browser work. On Vercel's **Hobby** plan that
+runs into two hard limits: functions are killed at **60s** (so barely one row
+fits), and Hobby cron jobs only fire ~once/day. So the sweep runs as a
 **scheduled GitHub Actions workflow** instead — GitHub runners have no 60s cap
 (6-hour limit) and it's free. Vercel only hosts the API (`POST /api/track`).
+
+The sweep runs a **local headless Chromium on the runner**, *not* Browserless.
+A full VFS check takes ~60s+, but the Browserless plan caps each session at 60s
+and kills the check mid-status-read; the GitHub runner has no such limit (and
+it's one less paid dependency). The workflow `playwright install`s Chromium and
+leaves `BROWSERLESS_WS_ENDPOINT` unset so `check_vfs_status` launches locally.
 
 ### How it works
 
 1. `POST /api/track` (on Vercel) upserts one document with `status="PENDING"`
    and returns `202 {"status": "tracking"}` immediately. **No checking here.**
 2. Twice a day, the GitHub Actions workflow runs `python -m app.sweep`. It finds
-   every `PENDING` document, checks each (≤2 at a time — the Browserless session
-   limit), and writes the resolved status back. When a status becomes terminal
-   (`APPROVED`/`REJECTED`) it no longer matches the `PENDING` filter, so future
-   sweeps skip it automatically.
+   every `PENDING` document, checks each (≤2 at a time), and writes the resolved
+   status back. When a status becomes terminal (`APPROVED`/`REJECTED`) it no
+   longer matches the `PENDING` filter, so future sweeps skip it automatically.
 3. When a status changes off `PENDING`, a Telegram notification is sent
    (reference number, status, CRM deal link). Separately, **every** check posts
    a one-line log to a second Telegram chat so you can confirm the sweep ran.
@@ -224,7 +229,7 @@ Actions secrets (for the sweep):
 | Variable                  | Where                    | Notes                                                        |
 |---------------------------|--------------------------|--------------------------------------------------------------|
 | `MONGODB_URI`             | Vercel + GitHub          | Include the DB name, e.g. `mongodb+srv://…/visa_tracker`      |
-| `BROWSERLESS_WS_ENDPOINT` | Vercel + GitHub          | Remote Chromium endpoint (no local Chrome anywhere)          |
+| `BROWSERLESS_WS_ENDPOINT` | Vercel only              | Remote browser for Vercel (can't run Chromium). The GitHub sweep uses a local Chromium, so **don't** set it there. |
 | `TELEGRAM_BOT_TOKEN`      | Vercel + GitHub          | One bot, used for both chats                                  |
 | `TELEGRAM_CHAT_ID`        | Vercel + GitHub          | Status-resolved notifications                                 |
 | `TELEGRAM_LOG_CHAT_ID`    | Vercel + GitHub          | Per-check operational log                                     |

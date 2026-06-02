@@ -31,15 +31,21 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      # We connect to a remote browser via Browserless.io, so we do NOT run
-      # `playwright install` — no local Chromium binary is needed.
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      # The sweep runs a LOCAL Chromium on the runner (not Browserless): the
+      # Browserless plan caps sessions at 60s, but a full VFS check takes ~60s+,
+      # so Browserless kills it mid-check. The GitHub runner has no such limit,
+      # so we install Chromium here and leave BROWSERLESS_WS_ENDPOINT unset
+      # below -> check_vfs_status launches the local browser.
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
 
       - name: Run sweep
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
-          BROWSERLESS_WS_ENDPOINT: ${{ secrets.BROWSERLESS_WS_ENDPOINT }}
+          # BROWSERLESS_WS_ENDPOINT intentionally NOT set -> use local Chromium.
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_LOG_CHAT_ID: ${{ secrets.TELEGRAM_LOG_CHAT_ID }}

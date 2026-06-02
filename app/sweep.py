@@ -36,7 +36,9 @@ PENDING = "PENDING"
 APPROVED = "APPROVED"
 REJECTED = "REJECTED"
 
-# Browserless.io allows ~2 concurrent sessions on our plan — don't exceed it.
+# How many rows to check at once. The sweep runs local headless Chromium on the
+# GitHub runner (2 vCPUs), so keep this small; 2 is comfortable. (If a run ever
+# uses Browserless instead, this must also stay within that plan's session cap.)
 MAX_CONCURRENCY = 2
 
 
