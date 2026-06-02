@@ -9,12 +9,13 @@ name: Visa status sweep
 # may be delayed a few minutes under GitHub load.
 on:
   schedule:
-    - cron: "0 8 * * *"    # 08:00 UTC
-    - cron: "0 20 * * *"   # 20:00 UTC
+    # Cron is UTC. Dubai is UTC+4 (no DST): 10:00 Dubai = 06:00 UTC, 17:00 = 13:00 UTC.
+    - cron: "0 6 * * *"     # 10:00 Dubai
+    - cron: "0 13 * * *"    # 17:00 Dubai
   workflow_dispatch: {}    # lets you run it on demand from the Actions tab
 
 # A second run starting while one is still going would double-check rows and
-# fight over the limited Browserless sessions — so never overlap.
+# contend for the runner's CPU/memory — so never overlap.
 concurrency:
   group: visa-sweep
   cancel-in-progress: false

@@ -181,6 +181,36 @@ curl https://<your-app>.vercel.app/api/cron/check \
 # -> {"checked": 3, "resolved": 1}
 ```
 
+### Dashboard
+
+A read-only dashboard lives at **`GET /dashboard`** — a table of every tracked
+application with its current status, the raw `status_text` (failures show as a
+red `ERROR …`), when each row was last checked, plus summary counts and the
+**last sweep run** and **next scheduled run**. It auto-refreshes every 30s and
+is the app's home (`/` redirects here).
+
+It's backed by **`GET /api/watchlist`** (JSON): `{ rows, summary, last_run,
+next_run, server_time }`. The `last_run` data comes from a small **`sweep_runs`**
+collection — one tiny document per sweep (start/finish + checked/resolved/errors).
+
+The dashboard header links to **`/check-status`** (a one-off check that does
+*not* save — 3 fields) and **`/add-tracking`** (saves to the watchlist via
+`POST /api/track` — 4 fields incl. Deal ID), and has **Run sweep now**, which
+triggers the GitHub Actions sweep on demand
+via **`POST /api/run-sweep`** (GitHub's `workflow_dispatch` API). That endpoint
+needs a **`GITHUB_TOKEN`** env var on the server — a fine-grained PAT with
+"Actions: read and write" on the repo. Without it the button returns a clear
+"not configured" message. Repo/workflow/branch are overridable via
+`GITHUB_REPO`, `GITHUB_WORKFLOW_FILE`, `GITHUB_WORKFLOW_REF` (defaults target
+this repo's `visa-sweep.yml` on `captcha-api`).
+
+> `next_run` is derived from `SWEEP_UTC_HOURS` in `app/main.py`, which mirrors
+> the cron in the workflow — keep the two in sync if you change the schedule.
+
+> ⚠️ The dashboard, `/api/watchlist`, and `/api/run-sweep` are **unauthenticated**.
+> The data includes reference numbers + last names (PII), and `run-sweep` starts
+> a billable CI run. Put them behind auth before exposing the app publicly.
+
 ### Data model — collection `visa_tracking`
 
 A **unique compound index on `(deal_id, reference_number)`** is created at
@@ -192,7 +222,7 @@ startup, so re-submitting the same deal is a no-op (`$setOnInsert`).
   "reference_number": "INND12345678",
   "last_name": "SHARMA",
   "country": "germany",
-  "status": "PENDING",          // PENDING | APPROVED | REJECTED
+  "status": "PENDING",          // PENDING | APPROVED | REJECTED | NOT_FOUND
   "status_text": "Visa Application ... under process",  // raw VFS text (set after first check)
   "last_checked_at": null,      // UTC datetime, null until first check
   "created_at": "2026-06-01T08:00:00Z"
@@ -211,11 +241,11 @@ which runs `python -m app.sweep` twice a day:
 
 ```yaml
 schedule:
-  - cron: "0 8 * * *"    # 08:00 UTC
-  - cron: "0 20 * * *"   # 20:00 UTC
+  - cron: "0 6 * * *"    # 10:00 Dubai (06:00 UTC)
+  - cron: "0 13 * * *"   # 17:00 Dubai (13:00 UTC)
 ```
 
-Cron is **UTC** and may be delayed a few minutes under GitHub load. You can also
+Cron is **UTC** (Dubai is UTC+4, no DST) and may be delayed a few minutes under GitHub load. You can also
 run it on demand from the repo's **Actions** tab (`workflow_dispatch`).
 
 > ⚠️ Scheduled workflows only run from the repository's **default branch**, so
