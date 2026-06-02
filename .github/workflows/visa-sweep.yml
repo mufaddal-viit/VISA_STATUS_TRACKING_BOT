@@ -1,0 +1,57 @@
+name: Visa status sweep
+
+# Primary trigger for the watchlist sweep. Runs on GitHub-hosted runners, which
+# have NO 60s limit (Vercel Hobby's cap can't fit even one ~55s row reliably),
+# and it's free. Vercel only hosts the API (POST /api/track).
+#
+# NOTE: scheduled workflows run from the repository's DEFAULT branch only, so
+# this file must be committed there for the schedule to fire. Cron is UTC and
+# may be delayed a few minutes under GitHub load.
+on:
+  schedule:
+    - cron: "0 8 * * *"    # 08:00 UTC
+    - cron: "0 20 * * *"   # 20:00 UTC
+  workflow_dispatch: {}    # lets you run it on demand from the Actions tab
+
+# A second run starting while one is still going would double-check rows and
+# fight over the limited Browserless sessions — so never overlap.
+concurrency:
+  group: visa-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # The sweep runs a LOCAL Chromium on the runner (not Browserless): the
+      # Browserless plan caps sessions at 60s, but a full VFS check takes ~60s+,
+      # so Browserless kills it mid-check. The GitHub runner has no such limit,
+      # so we install Chromium here and leave BROWSERLESS_WS_ENDPOINT unset
+      # below -> check_vfs_status launches the local browser.
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run sweep
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          # BROWSERLESS_WS_ENDPOINT intentionally NOT set -> use local Chromium.
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_LOG_CHAT_ID: ${{ secrets.TELEGRAM_LOG_CHAT_ID }}
+          AZAPI_API_KEY: ${{ secrets.AZAPI_API_KEY }}
+          TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CAPTCHA_SOLVER: ${{ vars.CAPTCHA_SOLVER }}
+          LOG_FORMAT: console
+        run: python -m app.sweep

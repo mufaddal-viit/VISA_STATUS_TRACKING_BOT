@@ -2,8 +2,15 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings
+
+# Populate os.environ from a local .env so the modules that read env vars
+# directly (app/db.py, app/telegram.py, the CRON_SECRET check) work in local
+# dev. No-op in production: Vercel and GitHub Actions supply real env vars and
+# ship no .env file, and load_dotenv() never overrides an existing variable.
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # VFS tracking URL mapping  (country -> encoded tracking URL)
